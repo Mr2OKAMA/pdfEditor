@@ -19,6 +19,7 @@
     <button data-tool="rect">四角</button>
     <button data-tool="text">テキスト</button>
     <button data-tool="image">画像/署名</button>
+    <button id="btn-stamp" title="日付印（電子印）">電子印</button>
     <input type="color" id="color" value="#ffeb3b" title="色">
     <label>太さ<input type="number" id="width" value="2" min="1" max="20"></label>
     <label>文字<input type="number" id="fontsize" value="16" min="6" max="120"></label>
@@ -60,6 +61,25 @@
     </select>
   </label>
   <div class="actions"><button id="ins-cancel">キャンセル</button><button id="ins-ok" class="active">挿入</button></div>
+</dialog>
+<dialog id="stamp-dialog">
+  <h3>電子印（日付印）</h3>
+  <label>苗字（上段） <input type="text" id="stamp-top" maxlength="4"></label>
+  <label>日付（中段） <input type="date" id="stamp-date"></label>
+  <label>日付形式
+    <select id="stamp-fmt">
+      <option value="dot">2026.11.13</option>
+      <option value="slash">2026/11/13</option>
+      <option value="kanji">2026年11月13日</option>
+      <option value="short">26.11.13</option>
+      <option value="wdot">R8.11.13</option>
+      <option value="wkanji">令和8年11月13日</option>
+    </select>
+  </label>
+  <label>名前（下段） <input type="text" id="stamp-bottom" maxlength="4"></label>
+  <label>色 <input type="color" id="stamp-color" value="#d32f2f"></label>
+  <div style="text-align:center"><canvas id="stamp-preview" width="120" height="120" style="width:120px;height:120px"></canvas></div>
+  <div class="actions"><button id="stamp-cancel">キャンセル</button><button id="stamp-ok" class="active">配置</button></div>
 </dialog>
 <main id="viewer">
   <div id="drop">PDFファイルをここにドラッグ＆ドロップ、または「開く」を押してください</div>

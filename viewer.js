@@ -257,7 +257,7 @@ function attachPageEvents(i, { div, ov }) {
     if (tool === "image") {
       if (!state.pendingImage) { $("#file-image").click(); return; }
       const im = state.pendingImage;
-      const w = Math.min(200, im.img.naturalWidth), h = (w * im.img.naturalHeight) / im.img.naturalWidth;
+      const w = Math.min(im.width || 200, im.img.naturalWidth), h = (w * im.img.naturalHeight) / im.img.naturalWidth;
       addAnnot(i, { type: "image", x: x - w / 2, y: y - h / 2, w, h, img: im.img, bytes: im.bytes, mime: im.mime });
       return;
     }
@@ -748,3 +748,74 @@ window.addEventListener("beforeunload", (e) => { if (countAnnots()) e.preventDef
 
 const param = new URLSearchParams(location.search).get("url");
 if (param) openUrl(param);
+
+// ---------- 電子印（日付印） ----------
+function drawStamp(cv, top, date, bottom, color) {
+  const S = cv.width, c = cv.getContext("2d");
+  c.clearRect(0, 0, S, S);
+  c.strokeStyle = c.fillStyle = color;
+  c.lineWidth = S * 0.035;
+  c.beginPath();
+  c.arc(S / 2, S / 2, S / 2 - c.lineWidth, 0, Math.PI * 2);
+  c.stroke();
+  c.textAlign = "center";
+  c.textBaseline = "middle";
+  const fam = '"Yu Gothic","Meiryo",sans-serif';
+  const fit = (t, size, y, maxW) => {
+    c.font = `bold ${size}px ${fam}`;
+    const w = c.measureText(t).width;
+    if (w > maxW) c.font = `bold ${size * maxW / w}px ${fam}`;
+    c.fillText(t, S / 2, y);
+  };
+  fit(top, S * 0.24, S * 0.28, S * 0.6);
+  c.lineWidth = S * 0.015;
+  [0.41, 0.59].forEach((r) => { c.beginPath(); c.moveTo(S * 0.1, S * r); c.lineTo(S * 0.9, S * r); c.stroke(); });
+  fit(date, S * 0.14, S * 0.5, S * 0.76);
+  fit(bottom, S * 0.24, S * 0.72, S * 0.6);
+}
+function fmtStampDate(v, fmt) {
+  const [y, m, d] = v.split("-").map(Number);
+  if (!y) return "";
+  const t = y * 10000 + m * 100 + d;
+  const era = t >= 20190501 ? ["令和", "R", 2018] : t >= 19890108 ? ["平成", "H", 1988] : t >= 19261225 ? ["昭和", "S", 1925] : ["", "", 0];
+  const wy = y - era[2], wy1 = wy === 1 ? "元" : wy;
+  return {
+    dot: `${y}.${m}.${d}`,
+    slash: `${y}/${m}/${d}`,
+    kanji: `${y}年${m}月${d}日`,
+    short: `${String(y).slice(2)}.${m}.${d}`,
+    wdot: era[0] ? `${era[1]}${wy}.${m}.${d}` : `${y}.${m}.${d}`,
+    wkanji: era[0] ? `${era[0]}${wy1}年${m}月${d}日` : `${y}年${m}月${d}日`,
+  }[fmt];
+}
+const stampVals = () => [$("#stamp-top").value, fmtStampDate($("#stamp-date").value, $("#stamp-fmt").value), $("#stamp-bottom").value, $("#stamp-color").value];
+const stampPreview = () => drawStamp($("#stamp-preview"), ...stampVals());
+["stamp-top", "stamp-date", "stamp-fmt", "stamp-bottom", "stamp-color"].forEach((id) => ($("#" + id).oninput = stampPreview));
+$("#btn-stamp").onclick = () => {
+  const s = JSON.parse(localStorage.getItem("stamp") || "{}");
+  $("#stamp-top").value = s.top || "";
+  $("#stamp-bottom").value = s.bottom || "";
+  $("#stamp-color").value = s.color || "#d32f2f";
+  $("#stamp-fmt").value = s.fmt || "dot";
+  const n = new Date(), p = (v) => String(v).padStart(2, "0");
+  $("#stamp-date").value = `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`;
+  stampPreview();
+  $("#stamp-dialog").showModal();
+};
+$("#stamp-cancel").onclick = () => $("#stamp-dialog").close();
+$("#stamp-ok").onclick = async () => {
+  const [top, date, bottom, color] = stampVals();
+  localStorage.setItem("stamp", JSON.stringify({ top, bottom, color, fmt: $("#stamp-fmt").value }));
+  $("#stamp-dialog").close();
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 400;
+  drawStamp(cv, top, date, bottom, color);
+  const blob = await new Promise((r) => cv.toBlob(r, "image/png"));
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const img = new Image();
+  img.src = URL.createObjectURL(blob);
+  await img.decode();
+  state.pendingImage = { img, bytes, mime: "image/png", width: 60 };
+  setTool("image");
+  status("印を押したい位置をクリックしてください");
+};
