@@ -17,6 +17,8 @@ const state = {
   history: [],
   selected: null, // { page, a }
   pendingImage: null,
+  docs: [], // { name, bytes, current } (active entry is synced via stashActive)
+  active: -1,
 };
 
 function status(msg, ms = 2500) {
@@ -534,11 +536,132 @@ async function mergeFile(file) {
   } catch (e) { console.error(e); status("結合に失敗: " + e.message, 5000); }
 }
 
+// ---------- tabs ----------
+function stashActive() {
+  if (state.active < 0) return;
+  Object.assign(state.docs[state.active], { name: state.name, bytes: state.bytes, current: state.current });
+}
+
+function renderTabs() {
+  const bar = $("#tabs");
+  bar.textContent = "";
+  bar.hidden = !state.docs.length;
+  state.docs.forEach((d, i) => {
+    const t = document.createElement("div");
+    t.className = "tab" + (i === state.active ? " active" : "");
+    t.title = d.name;
+    const label = document.createElement("span");
+    label.textContent = d.name;
+    const x = document.createElement("button");
+    x.className = "close";
+    x.textContent = "×";
+    x.title = "閉じる";
+    x.onclick = (e) => { e.stopPropagation(); closeTab(i); };
+    t.append(label, x);
+    t.onclick = () => switchTab(i);
+    bar.append(t);
+  });
+  $("#btn-insert").disabled = !state.docs.length;
+}
+
+async function activate(i) {
+  state.active = i;
+  const d = state.docs[i];
+  state.current = d.current;
+  await loadBytes(d.bytes, d.name);
+  renderTabs();
+  viewerEl.children[state.current]?.scrollIntoView();
+}
+
+async function switchTab(i) {
+  if (i === state.active) return;
+  try {
+    await commitAnnotations(); // inactive tabs keep annotations baked into their bytes
+    stashActive();
+    await activate(i);
+  } catch (e) { console.error(e); status("タブ切替に失敗: " + e.message, 5000); }
+}
+
+async function closeTab(i) {
+  if (i === state.active && countAnnots() && !confirm("未保存の注釈があります。閉じますか？")) return;
+  if (i !== state.active && !confirm(`「${state.docs[i].name}」を閉じますか？`)) return;
+  stashActive();
+  const activeDoc = state.docs[state.active];
+  state.docs.splice(i, 1);
+  if (!state.docs.length) {
+    Object.assign(state, { bytes: null, pdf: null, active: -1, annots: {}, history: [], selected: null, pages: [], viewports: [], current: 0 });
+    viewerEl.innerHTML = '<div id="drop">PDFファイルをここにドラッグ＆ドロップ、または「開く」を押してください</div>';
+    $("#btn-save").disabled = true;
+    updatePageLabel();
+    return renderTabs();
+  }
+  if (state.docs.includes(activeDoc)) {
+    state.active = state.docs.indexOf(activeDoc);
+    renderTabs();
+  } else {
+    state.annots = {};
+    await activate(Math.min(i, state.docs.length - 1));
+  }
+}
+
+async function addDoc(bytes, name) {
+  if (hasDoc()) { await commitAnnotations(); stashActive(); }
+  state.docs.push({ name, bytes, current: 0 });
+  await activate(state.docs.length - 1);
+}
+
+// ---------- insert pages from other tab ----------
+function openInsertDialog() {
+  if (!hasDoc()) return;
+  stashActive();
+  const src = $("#ins-src");
+  src.textContent = "";
+  state.docs.forEach((d, i) => {
+    const o = new Option(`${d.name}${i === state.active ? "（このタブ）" : ""}`, i);
+    src.add(o);
+  });
+  src.value = state.docs.length > 1 ? (state.active === 0 ? 1 : 0) : state.active;
+  $("#ins-range").value = "";
+  $("#ins-where").value = "after";
+  updateInsertInfo();
+  $("#ins-dialog").showModal();
+}
+
+function updateInsertInfo() {
+  const d = state.docs[+$("#ins-src").value];
+  $("#ins-info").textContent = "";
+  if (!d) return;
+  PDFDocument.load(d.bytes, { ignoreEncryption: true }).then((p) => {
+    $("#ins-info").textContent = `全${p.getPageCount()}ページ（空欄で全ページ）`;
+  }).catch(() => {});
+}
+
+async function insertPages() {
+  const srcIdx = +$("#ins-src").value;
+  const where = $("#ins-where").value;
+  try {
+    const doc = await currentDoc();
+    stashActive();
+    const src = srcIdx === state.active ? doc : await PDFDocument.load(state.docs[srcIdx].bytes);
+    const rangeStr = $("#ins-range").value.trim();
+    const idx = rangeStr ? parseRange(rangeStr, src.getPageCount()) : src.getPageIndices();
+    if (!idx.length) return status("ページ指定が不正です");
+    const pages = await doc.copyPages(src, idx);
+    const n = doc.getPageCount();
+    const pos = where === "before" ? state.current : where === "end" ? n : state.current + 1;
+    pages.forEach((p, k) => doc.insertPage(pos + k, p));
+    state.current = pos;
+    await loadBytes(await doc.save());
+    stashActive();
+    viewerEl.children[state.current]?.scrollIntoView();
+    status(`${pages.length}ページを挿入しました`);
+  } catch (e) { console.error(e); status("挿入に失敗: " + e.message, 5000); }
+}
+
 // ---------- open ----------
 async function openFile(file) {
   try {
-    state.current = 0;
-    await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name);
+    await addDoc(new Uint8Array(await file.arrayBuffer()), file.name);
   } catch (e) { console.error(e); status("PDFを開けません: " + e.message, 5000); }
 }
 
@@ -548,15 +671,22 @@ async function openUrl(url) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(res.status + " " + res.statusText);
     const name = decodeURIComponent(new URL(url).pathname.split("/").pop() || "document.pdf");
-    state.current = 0;
-    await loadBytes(new Uint8Array(await res.arrayBuffer()), /\.pdf$/i.test(name) ? name : name + ".pdf");
+    await addDoc(new Uint8Array(await res.arrayBuffer()), /\.pdf$/i.test(name) ? name : name + ".pdf");
     status("読み込みました");
   } catch (e) { console.error(e); status("URLを開けません: " + e.message, 6000); }
 }
 
 // ---------- wiring ----------
 $("#btn-open").onclick = () => $("#file-open").click();
-$("#file-open").onchange = (e) => { if (e.target.files[0]) openFile(e.target.files[0]); e.target.value = ""; };
+$("#file-open").onchange = async (e) => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  for (const f of files) await openFile(f);
+};
+$("#btn-insert").onclick = openInsertDialog;
+$("#ins-src").onchange = updateInsertInfo;
+$("#ins-cancel").onclick = () => $("#ins-dialog").close();
+$("#ins-ok").onclick = () => { $("#ins-dialog").close(); insertPages(); };
 $("#btn-save").onclick = save;
 $("#btn-undo").onclick = undo;
 $("#file-merge").onchange = (e) => { if (e.target.files[0]) mergeFile(e.target.files[0]); e.target.value = ""; };
@@ -609,9 +739,11 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("dragover", (e) => e.preventDefault());
 document.addEventListener("drop", (e) => {
   e.preventDefault();
-  const f = [...e.dataTransfer.files].find((x) => x.type === "application/pdf" || /\.pdf$/i.test(x.name));
-  if (f) openFile(f);
+  (async () => {
+    for (const f of [...e.dataTransfer.files].filter((x) => x.type === "application/pdf" || /\.pdf$/i.test(x.name))) await openFile(f);
+  })();
 });
+renderTabs();
 window.addEventListener("beforeunload", (e) => { if (countAnnots()) e.preventDefault(); });
 
 const param = new URLSearchParams(location.search).get("url");
