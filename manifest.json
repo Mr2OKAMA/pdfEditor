@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "PDF ビューア＆エディタ",
+  "version": "1.0.0",
+  "description": "PDFの表示、注釈、テキスト/画像追加、ページ操作、結合・抽出を端末内で行います。",
+  "action": { "default_title": "PDFエディタを開く" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["contextMenus"],
+  "host_permissions": ["http://*/*", "https://*/*", "file:///*"],
+  "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

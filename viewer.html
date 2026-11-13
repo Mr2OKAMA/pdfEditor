@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>PDF ビューア＆エディタ</title>
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+<header id="toolbar">
+  <div class="group">
+    <button id="btn-open">開く</button>
+    <button id="btn-save" disabled>保存</button>
+    <input type="file" id="file-open" accept="application/pdf" hidden>
+  </div>
+  <div class="group" id="tools">
+    <button data-tool="select" class="active" title="選択/移動 (Deleteで削除)">選択</button>
+    <button data-tool="highlight">ハイライト</button>
+    <button data-tool="draw">手書き</button>
+    <button data-tool="rect">四角</button>
+    <button data-tool="text">テキスト</button>
+    <button data-tool="image">画像/署名</button>
+    <input type="color" id="color" value="#ffeb3b" title="色">
+    <label>太さ<input type="number" id="width" value="2" min="1" max="20"></label>
+    <label>文字<input type="number" id="fontsize" value="16" min="6" max="120"></label>
+    <button id="btn-undo" title="Ctrl+Z">元に戻す</button>
+  </div>
+  <div class="group">
+    <button id="btn-zoom-out">－</button>
+    <span id="zoom-label">100%</span>
+    <button id="btn-zoom-in">＋</button>
+    <span id="page-label">- / -</span>
+  </div>
+  <div class="group" id="page-ops">
+    <button data-op="rotate-l">⟲ 回転</button>
+    <button data-op="rotate-r">⟳ 回転</button>
+    <button data-op="delete">ページ削除</button>
+    <button data-op="up">↑ 移動</button>
+    <button data-op="down">↓ 移動</button>
+    <button data-op="blank">白紙挿入</button>
+    <button data-op="merge">結合</button>
+    <button data-op="extract">抽出</button>
+    <button data-op="watermark">透かし</button>
+    <button data-op="numbers">ページ番号</button>
+    <input type="file" id="file-merge" accept="application/pdf" hidden>
+    <input type="file" id="file-image" accept="image/png,image/jpeg" hidden>
+  </div>
+</header>
+<main id="viewer">
+  <div id="drop">PDFファイルをここにドラッグ＆ドロップ、または「開く」を押してください</div>
+</main>
+<div id="status"></div>
+<script src="lib/pdf.min.js"></script>
+<script src="lib/pdf-lib.min.js"></script>
+<script src="viewer.js"></script>
+</body>
+</html>
