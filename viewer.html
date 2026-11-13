@@ -10,7 +10,7 @@
   <div class="group">
     <button id="btn-open">開く</button>
     <button id="btn-save" disabled>保存</button>
-    <input type="file" id="file-open" accept="application/pdf" hidden>
+    <input type="file" id="file-open" accept="application/pdf" multiple hidden>
   </div>
   <div class="group" id="tools">
     <button data-tool="select" class="active" title="選択/移動 (Deleteで削除)">選択</button>
@@ -38,6 +38,7 @@
     <button data-op="down">↓ 移動</button>
     <button data-op="blank">白紙挿入</button>
     <button data-op="merge">結合</button>
+    <button id="btn-insert" disabled title="他のタブのPDFからページを挿入">他PDFから挿入</button>
     <button data-op="extract">抽出</button>
     <button data-op="watermark">透かし</button>
     <button data-op="numbers">ページ番号</button>
@@ -45,6 +46,21 @@
     <input type="file" id="file-image" accept="image/png,image/jpeg" hidden>
   </div>
 </header>
+<nav id="tabs" hidden></nav>
+<dialog id="ins-dialog">
+  <h3>他のPDFからページを挿入</h3>
+  <label>元のPDF <select id="ins-src"></select></label>
+  <label>ページ <input type="text" id="ins-range" placeholder="例: 1-3,5"></label>
+  <div id="ins-info"></div>
+  <label>挿入位置
+    <select id="ins-where">
+      <option value="after">現在のページの後</option>
+      <option value="before">現在のページの前</option>
+      <option value="end">末尾</option>
+    </select>
+  </label>
+  <div class="actions"><button id="ins-cancel">キャンセル</button><button id="ins-ok" class="active">挿入</button></div>
+</dialog>
 <main id="viewer">
   <div id="drop">PDFファイルをここにドラッグ＆ドロップ、または「開く」を押してください</div>
 </main>
