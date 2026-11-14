@@ -367,6 +367,44 @@ function bounds(a) {
   return { x: a.x, y: a.y, w: a.w, h: a.h };
 }
 
+// ---------- resize handles ----------
+const HANDLE = 8; // 画面上のハンドル一辺(px)
+const resizable = (a) => a.type === "image" || a.type === "rect" || a.type === "highlight";
+const handleCursor = { nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize" };
+
+function handlePoints(a) {
+  const b = bounds(a);
+  return [
+    { k: "nw", x: b.x, y: b.y },
+    { k: "ne", x: b.x + b.w, y: b.y },
+    { k: "sw", x: b.x, y: b.y + b.h },
+    { k: "se", x: b.x + b.w, y: b.y + b.h },
+  ];
+}
+
+function hitHandle(a, x, y) {
+  if (!resizable(a)) return null;
+  const m = HANDLE / state.zoom;
+  for (const p of handlePoints(a)) if (Math.abs(x - p.x) <= m && Math.abs(y - p.y) <= m) return p.k;
+  return null;
+}
+
+function resizeAnnot(a, key, nx, ny, keepRatio) {
+  const min = 4 / state.zoom;
+  const left = key === "nw" || key === "sw", top = key === "nw" || key === "ne";
+  const ax = left ? a.x + a.w : a.x, ay = top ? a.y + a.h : a.y; // 固定する対角の点
+  let w = Math.max(Math.abs(nx - ax), min), h = Math.max(Math.abs(ny - ay), min);
+  const ratio = a.type === "image" && a.img && a.img.naturalHeight ? a.img.naturalWidth / a.img.naturalHeight : null;
+  if (keepRatio && ratio) {
+    if (w / ratio > h) h = w / ratio;
+    else w = h * ratio;
+  }
+  a.x = left ? ax - w : ax;
+  a.y = top ? ay - h : ay;
+  a.w = w;
+  a.h = h;
+}
+
 function redraw(i, preview) {
   const { ov, ctx } = state.pages[i];
   const dpr = window.devicePixelRatio || 1;
@@ -375,11 +413,21 @@ function redraw(i, preview) {
   (state.annots[i] || []).forEach((a) => drawAnnot(ctx, a, state.zoom));
   if (preview) drawAnnot(ctx, preview, state.zoom);
   if (state.selected && state.selected.page === i) {
-    const b = bounds(state.selected.a);
+    const a = state.selected.a, b = bounds(a);
     ctx.save();
     ctx.strokeStyle = "#0f6cbd";
     ctx.setLineDash([5, 3]);
     ctx.strokeRect(b.x * state.zoom - 3, b.y * state.zoom - 3, b.w * state.zoom + 6, b.h * state.zoom + 6);
+    if (resizable(a)) {
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#fff";
+      ctx.lineWidth = 1;
+      handlePoints(a).forEach((p) => {
+        const hx = p.x * state.zoom, hy = p.y * state.zoom;
+        ctx.fillRect(hx - HANDLE / 2, hy - HANDLE / 2, HANDLE, HANDLE);
+        ctx.strokeRect(hx - HANDLE / 2, hy - HANDLE / 2, HANDLE, HANDLE);
+      });
+    }
     ctx.restore();
   }
 }
@@ -442,6 +490,28 @@ function attachPageEvents(i, { div, ov }) {
     const lw = +$("#width").value || 2;
 
     if (tool === "select") {
+      const sel = state.selected;
+      const hk = sel && sel.page === i ? hitHandle(sel.a, x, y) : null;
+      if (hk) {
+        pushHistory();
+        const list = state.annots[i];
+        const clone = structuredCloneAnnot(sel.a);
+        list[list.indexOf(sel.a)] = clone;
+        state.selected = { page: i, a: clone };
+        ov.setPointerCapture(e.pointerId);
+        const move = (ev) => {
+          const [nx, ny] = pos(ev);
+          resizeAnnot(clone, hk, nx, ny, !ev.shiftKey);
+          redraw(i);
+        };
+        const up = () => {
+          ov.removeEventListener("pointermove", move);
+          ov.removeEventListener("pointerup", up);
+        };
+        ov.addEventListener("pointermove", move);
+        ov.addEventListener("pointerup", up);
+        return;
+      }
       const a = hit(i, x, y);
       const prev = state.selected && state.selected.page;
       state.selected = a ? { page: i, a } : null;
@@ -478,7 +548,12 @@ function attachPageEvents(i, { div, ov }) {
       if (!state.pendingImage) { $("#file-image").click(); return; }
       const im = state.pendingImage;
       const w = Math.min(im.width || 200, im.img.naturalWidth), h = (w * im.img.naturalHeight) / im.img.naturalWidth;
-      addAnnot(i, { type: "image", x: x - w / 2, y: y - h / 2, w, h, img: im.img, bytes: im.bytes, mime: im.mime });
+      const a = { type: "image", x: x - w / 2, y: y - h / 2, w, h, img: im.img, bytes: im.bytes, mime: im.mime };
+      addAnnot(i, a);
+      state.selected = { page: i, a };
+      setTool("select");
+      redraw(i);
+      status("四隅のハンドルをドラッグして大きさを変更できます（Shiftで縦横比を固定解除）");
       return;
     }
 
@@ -505,6 +580,17 @@ function attachPageEvents(i, { div, ov }) {
     ov.addEventListener("pointermove", move);
     ov.addEventListener("pointerup", up);
   });
+
+  ov.addEventListener("pointermove", (e) => {
+    if (e.buttons) return;
+    if (state.tool !== "select") { ov.style.cursor = ""; return; }
+    const sel = state.selected;
+    if (!sel || sel.page !== i) { ov.style.cursor = ""; return; }
+    const [x, y] = pos(e);
+    const k = hitHandle(sel.a, x, y);
+    ov.style.cursor = k ? handleCursor[k] : "";
+  });
+  ov.addEventListener("pointerleave", () => (ov.style.cursor = ""));
 }
 
 function structuredCloneAnnot(a) {
