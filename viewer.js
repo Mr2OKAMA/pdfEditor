@@ -19,7 +19,13 @@ const state = {
   pendingImage: null,
   docs: [], // { name, bytes, current } (active entry is synced via stashActive)
   active: -1,
+  textReady: Promise.resolve(), // resolves when every page's text layer is built
 };
+
+// incremented on every renderAll() so stale async text-layer builds can bail out
+let renderSeq = 0;
+
+const search = { q: "", cs: false, matches: [], idx: -1 };
 
 function status(msg, ms = 2500) {
   const el = $("#status");
@@ -43,14 +49,18 @@ async function loadBytes(bytes, name) {
   state.selected = null;
   state.current = Math.min(state.current, state.pdf.numPages - 1);
   $("#btn-save").disabled = false;
+  $("#btn-print").disabled = false;
+  $("#search-input").disabled = false;
   await renderAll();
 }
 
 async function renderAll() {
   const keep = viewerEl.scrollTop;
+  const token = ++renderSeq;
   viewerEl.textContent = "";
   state.pages = [];
   state.viewports = [];
+  const textTasks = [];
   const dpr = window.devicePixelRatio || 1;
   for (let i = 0; i < state.pdf.numPages; i++) {
     const page = await state.pdf.getPage(i + 1);
@@ -62,29 +72,236 @@ async function renderAll() {
     div.className = "page";
     div.style.width = vp.width + "px";
     div.style.height = vp.height + "px";
+    div.style.setProperty("--scale-factor", state.zoom);
     const cv = document.createElement("canvas");
     cv.width = vp.width * dpr;
     cv.height = vp.height * dpr;
     cv.style.width = vp.width + "px";
     cv.style.height = vp.height + "px";
+    const tl = document.createElement("div");
+    tl.className = "textLayer";
     const ov = document.createElement("canvas");
     ov.className = "ov";
     ov.width = vp.width * dpr;
     ov.height = vp.height * dpr;
     ov.style.width = vp.width + "px";
     ov.style.height = vp.height + "px";
-    div.append(cv, ov);
+    div.append(cv, tl, ov);
     viewerEl.append(div);
-    const entry = { div, ov, ctx: ov.getContext("2d") };
+    const entry = { div, ov, ctx: ov.getContext("2d"), tl, textDivs: [], textStrs: [], divStart: [], pageText: "", hlDivs: [], textReady: false };
     state.pages.push(entry);
     attachPageEvents(i, entry);
     page.render({ canvasContext: cv.getContext("2d"), viewport: vp, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null });
+    textTasks.push(buildTextLayer(i, page, vp, entry, token));
     redraw(i);
   }
+  state.textReady = Promise.all(textTasks);
   viewerEl.scrollTop = keep;
   updatePageLabel();
   $("#zoom-label").textContent = Math.round((state.zoom / 1.2) * 100) + "%";
   setTool(state.tool);
+  if (search.q) runSearch(false);
+}
+
+// ---------- text layer (selection + search) ----------
+async function buildTextLayer(i, page, vp, entry, token) {
+  try {
+    const source = await page.getTextContent();
+    if (token !== renderSeq) return;
+    const textDivs = [];
+    await pdfjsLib.renderTextLayer({ textContentSource: source, container: entry.tl, viewport: vp, textDivs }).promise;
+    if (token !== renderSeq) return;
+    entry.textDivs = textDivs;
+    entry.textStrs = textDivs.map((d) => d.textContent || "");
+    entry.divStart = [];
+    let off = 0;
+    for (const s of entry.textStrs) { entry.divStart.push(off); off += s.length; }
+    entry.pageText = entry.textStrs.join("");
+    const eoc = document.createElement("div");
+    eoc.className = "endOfContent";
+    entry.tl.append(eoc);
+    entry.tl.addEventListener("pointerdown", () => eoc.classList.add("active"));
+    entry.tl.addEventListener("pointerup", () => eoc.classList.remove("active"));
+    entry.textReady = true;
+  } catch (e) {
+    if (e && e.name !== "AbortException") console.error(e);
+  }
+}
+
+function clearHighlights(i) {
+  const e = state.pages[i];
+  if (!e || !e.hlDivs.length) return;
+  for (const k of e.hlDivs) if (e.textDivs[k]) e.textDivs[k].textContent = e.textStrs[k];
+  e.hlDivs = [];
+}
+
+function clearAllHighlights() {
+  state.pages.forEach((_, i) => clearHighlights(i));
+}
+
+function applyHighlights(i) {
+  const e = state.pages[i];
+  if (!e || !e.textReady) return;
+  clearHighlights(i);
+  const segs = new Map();
+  search.matches.forEach((m, g) => {
+    if (m.page !== i) return;
+    const sel = g === search.idx;
+    let k = divIndexAt(e, m.begin);
+    let pos = m.begin;
+    while (k < e.textStrs.length && pos < m.end) {
+      const ds = e.divStart[k], de = ds + e.textStrs[k].length;
+      const s = Math.max(pos, ds) - ds, en = Math.min(m.end, de) - ds;
+      if (en > s) {
+        if (!segs.has(k)) segs.set(k, []);
+        segs.get(k).push({ s, e: en, sel });
+        pos = ds + en;
+      }
+      k++;
+    }
+  });
+  for (const [k, list] of segs) {
+    const div = e.textDivs[k];
+    if (!div) continue;
+    const str = e.textStrs[k];
+    list.sort((a, b) => a.s - b.s);
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    for (const sg of list) {
+      if (sg.s < last) continue;
+      if (sg.s > last) frag.append(document.createTextNode(str.slice(last, sg.s)));
+      const sp = document.createElement("span");
+      sp.className = "highlight" + (sg.sel ? " selected" : "");
+      sp.textContent = str.slice(sg.s, sg.e);
+      frag.append(sp);
+      last = sg.e;
+    }
+    if (last < str.length) frag.append(document.createTextNode(str.slice(last)));
+    div.textContent = "";
+    div.append(frag);
+    e.hlDivs.push(k);
+  }
+}
+
+function divIndexAt(e, off) {
+  let lo = 0, hi = e.divStart.length - 1, best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (e.divStart[mid] <= off) { best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return best;
+}
+
+function updateSearchCount() {
+  const n = search.matches.length;
+  $("#search-count").textContent = !search.q ? "" : n ? `${search.idx + 1} / ${n}` : "0 件";
+  $("#search-prev").disabled = $("#search-next").disabled = n < 2;
+}
+
+async function runSearch(reset = true) {
+  const q = $("#search-input").value;
+  search.q = q;
+  search.cs = $("#search-case").checked;
+  clearAllHighlights();
+  if (!q || !hasDoc()) {
+    search.matches = [];
+    search.idx = -1;
+    updateSearchCount();
+    return;
+  }
+  const token = renderSeq;
+  await state.textReady;
+  if (token !== renderSeq || search.q !== q) return;
+  const needle = search.cs ? q : q.toLowerCase();
+  const matches = [];
+  state.pages.forEach((e, i) => {
+    if (!e.textReady) return;
+    const hay = search.cs ? e.pageText : e.pageText.toLowerCase();
+    for (let p = 0; ;) {
+      const k = hay.indexOf(needle, p);
+      if (k < 0) break;
+      matches.push({ page: i, begin: k, end: k + needle.length });
+      p = k + needle.length;
+    }
+  });
+  search.matches = matches;
+  if (reset || search.idx < 0 || search.idx >= matches.length) search.idx = matches.length ? 0 : -1;
+  state.pages.forEach((_, i) => applyHighlights(i));
+  updateSearchCount();
+  if (reset) scrollToMatch();
+}
+
+function gotoMatch(d) {
+  const n = search.matches.length;
+  if (!n) return;
+  const prev = search.idx;
+  search.idx = (search.idx + d + n) % n;
+  const pages = new Set([search.matches[prev]?.page, search.matches[search.idx].page]);
+  pages.forEach((i) => i !== undefined && applyHighlights(i));
+  updateSearchCount();
+  scrollToMatch();
+}
+
+function scrollToMatch() {
+  const m = search.matches[search.idx];
+  if (!m) return;
+  const e = state.pages[m.page];
+  const el = e && e.textDivs[divIndexAt(e, m.begin)];
+  (el || e?.div)?.scrollIntoView({ block: "center" });
+  if (state.current !== m.page) { state.current = m.page; updatePageLabel(); }
+}
+
+// ---------- printing ----------
+let printing = false;
+
+async function printDoc() {
+  if (!hasDoc() || printing) return;
+  printing = true;
+  const container = $("#print-container");
+  container.textContent = "";
+  const style = document.getElementById("print-style") || Object.assign(document.createElement("style"), { id: "print-style" });
+  document.head.append(style);
+  try {
+    const n = state.pdf.numPages;
+    // 150dpi for normal documents, lower for long ones to limit memory use
+    const scale = (n > 50 ? 110 : 150) / 72;
+    const v1 = state.viewports[0] || state.pdf.getPage(1).getViewport({ scale: 1 });
+    style.textContent = `@page { size: ${Math.round(v1.width)}pt ${Math.round(v1.height)}pt; margin: 0; }`;
+    for (let i = 0; i < n; i++) {
+      status(`印刷の準備中… ${i + 1}/${n}`, 0);
+      const page = await state.pdf.getPage(i + 1);
+      const vp = page.getViewport({ scale });
+      const cv = document.createElement("canvas");
+      cv.width = Math.floor(vp.width);
+      cv.height = Math.floor(vp.height);
+      const ctx = cv.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, cv.width, cv.height);
+      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      (state.annots[i] || []).forEach((a) => drawAnnot(ctx, a, scale));
+      const img = new Image();
+      img.src = cv.toDataURL("image/png");
+      cv.width = cv.height = 0;
+      await img.decode();
+      const wrap = document.createElement("div");
+      wrap.className = "print-page";
+      wrap.append(img);
+      container.append(wrap);
+    }
+    status("");
+    window.addEventListener("afterprint", endPrint, { once: true });
+    window.print();
+  } catch (e) {
+    console.error(e);
+    status("印刷に失敗: " + e.message, 5000);
+    endPrint();
+  }
+}
+
+function endPrint() {
+  printing = false;
+  $("#print-container").textContent = "";
+  document.getElementById("print-style")?.remove();
 }
 
 function updatePageLabel() {
@@ -191,7 +408,10 @@ function addAnnot(i, a) {
 function setTool(t) {
   state.tool = t;
   document.querySelectorAll("#tools [data-tool]").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
-  state.pages.forEach((p) => p.div.classList.toggle("select", t === "select"));
+  state.pages.forEach((p) => {
+    p.div.classList.toggle("select", t === "select");
+    p.div.classList.toggle("textsel", t === "textsel");
+  });
   if (t === "highlight") $("#color").value = "#ffeb3b";
   else if (t === "draw" || t === "rect") $("#color").value = "#e53935";
   else if (t === "text") $("#color").value = "#000000";
@@ -592,6 +812,10 @@ async function closeTab(i) {
     Object.assign(state, { bytes: null, pdf: null, active: -1, annots: {}, history: [], selected: null, pages: [], viewports: [], current: 0 });
     viewerEl.innerHTML = '<div id="drop">PDFファイルをここにドラッグ＆ドロップ、または「開く」を押してください</div>';
     $("#btn-save").disabled = true;
+    $("#btn-print").disabled = true;
+    $("#search-input").disabled = true;
+    $("#search-input").value = "";
+    runSearch();
     updatePageLabel();
     return renderTabs();
   }
@@ -688,6 +912,7 @@ $("#ins-src").onchange = updateInsertInfo;
 $("#ins-cancel").onclick = () => $("#ins-dialog").close();
 $("#ins-ok").onclick = () => { $("#ins-dialog").close(); insertPages(); };
 $("#btn-save").onclick = save;
+$("#btn-print").onclick = printDoc;
 $("#btn-undo").onclick = undo;
 $("#file-merge").onchange = (e) => { if (e.target.files[0]) mergeFile(e.target.files[0]); e.target.value = ""; };
 $("#file-image").onchange = async (e) => {
@@ -715,6 +940,19 @@ const zoom = (d) => {
 $("#btn-zoom-in").onclick = () => zoom(0.2);
 $("#btn-zoom-out").onclick = () => zoom(-0.2);
 
+let searchTimer;
+$("#search-input").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => runSearch(), 200);
+});
+$("#search-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); clearTimeout(searchTimer); search.q === e.target.value ? gotoMatch(e.shiftKey ? -1 : 1) : runSearch(); }
+  else if (e.key === "Escape") { e.target.value = ""; runSearch(); e.target.blur(); }
+});
+$("#search-case").onchange = () => runSearch();
+$("#search-prev").onclick = () => gotoMatch(-1);
+$("#search-next").onclick = () => gotoMatch(1);
+
 viewerEl.addEventListener("scroll", () => {
   const mid = viewerEl.getBoundingClientRect().top + viewerEl.clientHeight / 3;
   for (let i = 0; i < state.pages.length; i++) {
@@ -724,9 +962,18 @@ viewerEl.addEventListener("scroll", () => {
 });
 
 document.addEventListener("keydown", (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === "f") {
+    e.preventDefault();
+    const el = $("#search-input");
+    if (!el.disabled) { el.focus(); el.select(); }
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); printDoc(); return; }
+  if (e.key === "F3") { e.preventDefault(); gotoMatch(e.shiftKey ? -1 : 1); return; }
   if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT") return;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); }
-  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
+  if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); }
+  else if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
   else if ((e.key === "Delete" || e.key === "Backspace") && state.selected) {
     const { page, a } = state.selected;
     pushHistory();

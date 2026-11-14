@@ -10,10 +10,12 @@
   <div class="group">
     <button id="btn-open">開く</button>
     <button id="btn-save" disabled>保存</button>
+    <button id="btn-print" disabled title="印刷 (Ctrl+P)">印刷</button>
     <input type="file" id="file-open" accept="application/pdf" multiple hidden>
   </div>
   <div class="group" id="tools">
     <button data-tool="select" class="active" title="選択/移動 (Deleteで削除)">選択</button>
+    <button data-tool="textsel" title="本文テキストの選択・コピー">文字選択</button>
     <button data-tool="highlight">ハイライト</button>
     <button data-tool="draw">手書き</button>
     <button data-tool="rect">四角</button>
@@ -30,6 +32,13 @@
     <span id="zoom-label">100%</span>
     <button id="btn-zoom-in">＋</button>
     <span id="page-label">- / -</span>
+  </div>
+  <div class="group" id="search-group">
+    <input type="search" id="search-input" placeholder="検索 (Ctrl+F)" disabled>
+    <button id="search-prev" title="前の一致 (Shift+Enter)" disabled>↑</button>
+    <button id="search-next" title="次の一致 (Enter)" disabled>↓</button>
+    <span id="search-count"></span>
+    <label title="大文字と小文字を区別"><input type="checkbox" id="search-case">Aa</label>
   </div>
   <div class="group" id="page-ops">
     <button data-op="rotate-l">⟲ 回転</button>
@@ -84,6 +93,7 @@
 <main id="viewer">
   <div id="drop">PDFファイルをここにドラッグ＆ドロップ、または「開く」を押してください</div>
 </main>
+<div id="print-container" aria-hidden="true"></div>
 <div id="status"></div>
 <script src="lib/pdf.min.js"></script>
 <script src="lib/pdf-lib.min.js"></script>

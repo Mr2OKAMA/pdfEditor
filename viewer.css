@@ -28,3 +28,33 @@ dialog { border: 0; border-radius: 6px; padding: 16px; min-width: 320px; }
 dialog label { display: flex; justify-content: space-between; gap: 8px; margin: 8px 0; color: #000; }
 dialog .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 12px; }
 #ins-info { color: #555; font-size: 12px; }
+
+/* ---------- search ---------- */
+#search-input { width: 150px; padding: 3px 6px; border: 1px solid #55595e; border-radius: 4px; background: #3c3f43; color: #fff; }
+#search-input:disabled { opacity: .4; }
+#search-count { min-width: 56px; color: #bbb; font-variant-numeric: tabular-nums; }
+#search-group label { color: #ddd; }
+
+/* ---------- text layer (pdf.js) ---------- */
+.textLayer { position: absolute; inset: 0; overflow: hidden; line-height: 1; text-align: initial; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; pointer-events: none; user-select: none; }
+.textLayer span, .textLayer br { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0 0; margin: 0; }
+.textLayer span.markedContent { top: 0; height: 0; }
+.textLayer .highlight { background: rgba(255, 196, 0, .5); border-radius: 2px; }
+.textLayer .highlight.selected { background: rgba(255, 120, 0, .75); }
+.textLayer ::selection { background: rgba(0, 110, 255, .35); }
+.textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: -1; cursor: default; user-select: none; }
+.textLayer .endOfContent.active { top: 0; }
+.page.textsel .textLayer { pointer-events: auto; user-select: text; }
+.page.textsel .ov { pointer-events: none; }
+
+/* ---------- print ---------- */
+#print-container { display: none; }
+@media print {
+  html, body { height: 100%; margin: 0; background: #fff; overflow: visible; }
+  body { display: block; }
+  body > *:not(#print-container) { display: none !important; }
+  #print-container { display: block; }
+  .print-page { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; overflow: hidden; page-break-after: always; break-after: page; }
+  .print-page:last-child { page-break-after: auto; break-after: auto; }
+  .print-page img { display: block; max-width: 100%; max-height: 100%; }
+}
