@@ -332,6 +332,15 @@ function drawAnnot(ctx, a, z) {
       ctx.fillStyle = a.color;
       ctx.fillRect(a.x * z, a.y * z, a.w * z, a.h * z);
       break;
+    case "redact":
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = "#000";
+      ctx.fillRect(a.x * z, a.y * z, a.w * z, a.h * z);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "#e53935";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(a.x * z, a.y * z, a.w * z, a.h * z);
+      break;
     case "rect":
       ctx.strokeStyle = a.color;
       ctx.lineWidth = a.lw * z;
@@ -369,7 +378,7 @@ function bounds(a) {
 
 // ---------- resize handles ----------
 const HANDLE = 8; // 画面上のハンドル一辺(px)
-const resizable = (a) => a.type === "image" || a.type === "rect" || a.type === "highlight";
+const resizable = (a) => a.type === "image" || a.type === "rect" || a.type === "highlight" || a.type === "redact";
 const handleCursor = { nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize" };
 
 function handlePoints(a) {
@@ -463,6 +472,7 @@ function setTool(t) {
   if (t === "highlight") $("#color").value = "#ffeb3b";
   else if (t === "draw" || t === "rect") $("#color").value = "#e53935";
   else if (t === "text") $("#color").value = "#000000";
+  if (t === "redact") status("範囲をドラッグして墨消し。保存時にページが画像化され、元の文字は完全に削除されます", 5000);
 }
 
 function hit(i, x, y) {
@@ -702,11 +712,44 @@ async function bakeAnnotations(doc) {
   }
 }
 
+// 墨消し範囲を含むページを画像化して焼き込み、元のテキスト・図形情報を完全に除去する
+async function applyRedactions(bytes, redacts) {
+  const src = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+  const doc = await PDFDocument.load(bytes);
+  for (const [idx, list] of redacts) {
+    const page = await src.getPage(idx + 1);
+    const v1 = page.getViewport({ scale: 1 });
+    const scale = Math.min(3, 4000 / Math.max(v1.width, v1.height));
+    const vp = page.getViewport({ scale });
+    const cv = document.createElement("canvas");
+    cv.width = Math.ceil(vp.width);
+    cv.height = Math.ceil(vp.height);
+    const ctx = cv.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    ctx.fillStyle = "#000";
+    for (const a of list) ctx.fillRect(a.x * scale, a.y * scale, a.w * scale, a.h * scale);
+    const blob = await new Promise((r) => cv.toBlob(r, "image/jpeg", 0.92));
+    const img = await doc.embedJpg(new Uint8Array(await blob.arrayBuffer()));
+    const np = doc.insertPage(idx, [v1.width, v1.height]);
+    np.drawImage(img, { x: 0, y: 0, width: v1.width, height: v1.height });
+    doc.removePage(idx + 1);
+    cv.width = cv.height = 0;
+  }
+  await src.destroy();
+  return doc.save();
+}
+
 async function commitAnnotations() {
   if (!countAnnots()) return;
   const doc = await PDFDocument.load(state.bytes);
   await bakeAnnotations(doc);
   state.bytes = await doc.save();
+  const redacts = Object.entries(state.annots)
+    .map(([k, l]) => [+k, l.filter((a) => a.type === "redact")])
+    .filter(([, l]) => l.length);
+  if (redacts.length) state.bytes = await applyRedactions(state.bytes, redacts);
   state.annots = {};
   state.history = [];
 }
